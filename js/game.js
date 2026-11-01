@@ -4946,7 +4946,7 @@ const CH2 = window.CH2 = {
 // ---- SPRITE DEFS ----
 const CH2_KNIGHT = {
     idle:   { key:'ch2_knight_idle',   frames:7, fw:96, fh:83 },
-    walk:   { key:'ch2_knight_walk',   frames:7, fw:96, fh:83 },
+    walk:   { key:'ch2_knight_walk',   frames:8, fw:96, fh:83 },
     run:    { key:'ch2_knight_run',    frames:8, fw:96, fh:83 },
     jump:   { key:'ch2_knight_jump',   frames:5, fw:96, fh:83 },
     attack: { key:'ch2_knight_atk1',   frames:6, fw:96, fh:83 },
@@ -4975,6 +4975,8 @@ function makeCh2Player(character) {
         drawWidth: isNinja ? 128 : 160,
         drawHeight: isNinja ? 128 : 140,
         footOffset: isNinja ? 0 : 18,
+        // empty rows under the feet in the sprite art, scaled to drawHeight (knight 22/83*140, ninja 32/128*128)
+        artFeetPad: isNinja ? 32 : 37,
         vx: 0, vy: 0,
         speed: isNinja ? 5.5 : 5,
         jumpForce: isNinja ? -13.5 : -13,
@@ -5018,19 +5020,19 @@ const CH2_STAGES = [
         ],
         traps: [
             // First traps start far from spawn — visible and avoidable
-            { type:'fire',  x:420,  y:398, w:28, h:35 },
-            { type:'fire',  x:640,  y:398, w:28, h:35 },
+            { type:'fire',  x:420,  y:395, w:28, h:35 },
+            { type:'fire',  x:640,  y:395, w:28, h:35 },
             { type:'spike', x:960,  y:398, w:32, h:32 },
             { type:'spike', x:1100, y:398, w:32, h:32 },
             { type:'fire',  x:1460, y:388, w:28, h:32 },
             { type:'spike', x:1960, y:398, w:32, h:32 },
             { type:'spike', x:2120, y:398, w:32, h:32 },
             { type:'rock',  x:2600, y:280, groundY:430, spawnInterval:200, rocks:[], spawnTimer:60 },
-            { type:'fire',  x:2820, y:398, w:28, h:35 },
-            { type:'fire',  x:3000, y:398, w:28, h:35 },
+            { type:'fire',  x:2820, y:395, w:28, h:35 },
+            { type:'fire',  x:3000, y:395, w:28, h:35 },
         ],
         voidWardens: [],
-        exit: { x:3010, y:360 },
+        exit: { x:3010, y:350 },
         groundY: 430,
     },
 
@@ -5055,7 +5057,7 @@ const CH2_STAGES = [
         traps: [
             // Traps start well after spawn area
             { type:'spike', x:340,  y:398, w:32, h:32 },
-            { type:'spike', x:500,  y:398, w:32, h:32 },
+            { type:'spike', x:440,  y:398, w:32, h:32 },
             { type:'fire',  x:780,  y:368, w:28, h:32 },
             { type:'spike', x:1140, y:333, w:32, h:32 },
             { type:'rock',  x:1340, y:240, groundY:365, spawnInterval:220, rocks:[], spawnTimer:40 },
@@ -5066,8 +5068,8 @@ const CH2_STAGES = [
             { type:'fire',  x:2540, y:398, w:28, h:32 },
             { type:'fire',  x:2720, y:398, w:28, h:32 },
         ],
-        voidWardens: [{ x:1780, y:330, hp:60 }],
-        exit: { x:2780, y:360 },
+        voidWardens: [{ x:1900, y:280, hp:60 }],
+        exit: { x:2780, y:350 },
         groundY: 430,
     },
 
@@ -5098,7 +5100,7 @@ const CH2_STAGES = [
             { type:'fire',  x:2820, y:398, w:28, h:32 },
         ],
         voidWardens: [{ x:1250, y:200, hp:60 }],
-        exit: { x:2960, y:360 },
+        exit: { x:2960, y:350 },
         groundY: 430,
     },
 
@@ -5129,7 +5131,7 @@ const CH2_STAGES = [
             { type:'fire',  x:790,  y:368, w:28, h:32 },
             { type:'arrow', x:1140, y:328, w:32, h:32, shootTimer:0, arrows:[] },
             { type:'spike', x:1510, y:368, w:32, h:32 },
-            { type:'spike', x:1640, y:368, w:32, h:32 },
+            { type:'spike', x:1590, y:368, w:32, h:32 },
             { type:'arrow', x:1870, y:323, w:32, h:32, shootTimer:0, arrows:[] },
             { type:'rock',  x:2200, y:260, groundY:400, spawnInterval:200, rocks:[], spawnTimer:50 },
             { type:'fire',  x:2660, y:398, w:28, h:32 },
@@ -5138,10 +5140,10 @@ const CH2_STAGES = [
             { type:'spike', x:3100, y:398, w:32, h:32 },
         ],
         voidWardens: [
-            { x:1150, y:330, hp:60 },
-            { x:2280, y:370, hp:60 },
+            { x:1150, y:280, hp:60 },
+            { x:2280, y:320, hp:60 },
         ],
-        exit: { x:3140, y:360 },
+        exit: { x:3140, y:350 },
         groundY: 430,
     },
 
@@ -5166,23 +5168,23 @@ const CH2_STAGES = [
         ],
         traps: [
             { type:'fire',  x:200,  y:398, w:28, h:32 },
-            { type:'spike', x:820,  y:335, w:32, h:32 },
+            { type:'spike', x:890,  y:335, w:32, h:32, attachTo:2, dx:20 },
             { type:'rock',  x:1050, y:200, groundY:365, spawnInterval:160, rocks:[], spawnTimer:20 },
-            { type:'arrow', x:1200, y:263, w:32, h:32, shootTimer:0, arrows:[] },
-            { type:'fire',  x:1440, y:313, w:28, h:32 },
-            { type:'spike', x:1710, y:243, w:32, h:32 },
+            { type:'arrow', x:1200, y:263, w:32, h:32, shootTimer:0, arrows:[], attachTo:3, dx:60 },
+            { type:'fire',  x:1440, y:313, w:28, h:32, attachTo:4, dx:70 },
+            { type:'spike', x:1710, y:243, w:32, h:32, attachTo:5, dx:70 },
             { type:'rock',  x:1980, y:210, groundY:350, spawnInterval:175, rocks:[], spawnTimer:80 },
-            { type:'arrow', x:2240, y:253, w:32, h:32, shootTimer:0, arrows:[] },
+            { type:'arrow', x:2240, y:253, w:32, h:32, shootTimer:0, arrows:[], attachTo:7, dx:40 },
             { type:'fire',  x:2840, y:398, w:28, h:32 },
             { type:'fire',  x:3020, y:398, w:28, h:32 },
             { type:'spike', x:3150, y:398, w:32, h:32 },
         ],
         voidWardens: [
-            { x:1100, y:265, hp:60 },
-            { x:1900, y:295, hp:60 },
-            { x:2650, y:400, hp:60 },
+            { x:1100, y:215, hp:60 },
+            { x:1900, y:245, hp:60 },
+            { x:2900, y:350, hp:60 },
         ],
-        exit: { x:3220, y:360 },
+        exit: { x:3220, y:350 },
         groundY: 430,
     },
 ];
@@ -5363,7 +5365,7 @@ function showCh2Complete() {
 // ---- PLATFORM COLLISION HELPER ----
 function ch2PlatformCollide(obj, plats) {
     obj.grounded = false;
-    const surfOffset = 22;
+    const surfOffset = 0; // walkable surface = platform top edge
     for (const p of plats) {
         if (p.crumbled) continue;
         const surf = p.y + surfOffset;
@@ -5391,7 +5393,7 @@ function ch2PlatformCollide(obj, plats) {
 function ch2EdgeAhead(obj, plats, dir) {
     const probeX = dir > 0 ? obj.x + obj.width + 8 : obj.x - 8;
     const feetY   = obj.y + obj.height + (obj.footOffset||0) + 4;
-    const surfOffset = 22;
+    const surfOffset = 0; // walkable surface = platform top edge
     for (const p of plats) {
         if (p.crumbled) continue;
         const surf = p.y + surfOffset;
@@ -5523,6 +5525,10 @@ function updateCH2() {
     // Animate and move all traps, then do ONE collision check — break on first hit
     let trapHitThisFrame = false;
     ch2Traps.forEach(t => {
+        if (t.attachTo !== undefined) {
+            const mp = ch2MovingPlatforms[t.attachTo];
+            if (mp) { t.x = mp.x + t.dx; t.y = mp.y - t.h; }
+        }
         t.frameTimer = (t.frameTimer || 0) + 1;
         const speeds = { fire:8, spike:12, arrow:15, rock:6 };
         const frames = { fire:4,  spike:5,  arrow:6,  rock:6 };
@@ -5554,7 +5560,7 @@ function updateCH2() {
                 // Rock hits ground platforms
                 const allP2 = [...ch2Platforms, ...ch2MovingPlatforms];
                 for (const pl of allP2) {
-                    if (!pl.crumbled && r.y + r.r > pl.y + 22 && r.y - r.r < pl.y + 22 && r.x > pl.x && r.x < pl.x + pl.w) {
+                    if (!pl.crumbled && r.y + r.r > pl.y && r.y - r.r < pl.y && r.x > pl.x && r.x < pl.x + pl.w) {
                         r.active = false;
                         // Spawn pebble particles
                         for (let i = 0; i < 5; i++) {
@@ -5834,7 +5840,7 @@ function drawCH2() {
             window._ctx.globalAlpha = 0.25 + 0.15 * Math.sin(ch2Time * 0.1);
             window._ctx.fillStyle = '#000';
             window._ctx.beginPath();
-            window._ctx.ellipse(t.x, t.groundY + 22, 20, 6, 0, 0, Math.PI*2);
+            window._ctx.ellipse(t.x, t.groundY, 20, 6, 0, 0, Math.PI*2);
             window._ctx.fill();
             window._ctx.restore();
             // Draw warning warning indicator above spawn every few seconds
@@ -6010,7 +6016,7 @@ function drawCH2() {
             const frame = Math.min(p.frame, stateDef.frames-1);
             const dw = p.drawWidth, dh = p.drawHeight;
             const dx = p.x - (dw-p.width)/2;
-            const dy = p.y + p.height - dh + (p.footOffset||0);
+            const dy = p.y + p.height - dh + (p.footOffset||0) + (p.artFeetPad||0);
             window._ctx.save();
             if (p.invincible>0 && Math.floor(ch2Time/4)%2===0) window._ctx.globalAlpha=0.4;
             window._ctx.imageSmoothingEnabled = false;
