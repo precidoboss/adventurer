@@ -3241,6 +3241,19 @@
         }
     });
     window.addEventListener('keyup', e => keys[e.code] = false);
+
+    // Small read/write surface for the touch-controls layer (js/mobile.js)
+    window._mobileAPI = {
+        storyActive:  () => !!STORY_MODE.active,
+        dialogueOpen: () => !!(STORY_MODE.dialogue && !STORY_MODE.dialogue.inputMode),
+        inputMode:    () => !!(STORY_MODE.dialogue && STORY_MODE.dialogue.inputMode),
+        marketOpen:   () => !!STORY_MODE.marketOpen,
+        paused:       () => !!gamePaused,
+        dead:         () => !!player.dead,
+        setInput: v => { dialogueState.inputVal = String(v || '').replace(/[^a-zA-Z]/g, '').slice(0, 10); },
+        getInput: () => dialogueState.inputVal || '',
+        submitInput: () => submitNPC2Password(dialogueState.inputVal || ''),
+    };
     window.addEventListener('mousedown', () => { startMusic(); });
 
     function startAttack() {
