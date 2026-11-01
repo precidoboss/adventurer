@@ -66,6 +66,202 @@ const H = () => window.GAME_HEIGHT || 540;
 const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c =>
     ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 
+// ---------------- combat feedback: damage numbers, blood, sound ----------------
+const FX = { nums: [], blood: [], parts: [], shake: 0, flash: 0 };
+const rand = (a, b) => a + Math.random() * (b - a);
+
+function fxReset() { FX.nums = []; FX.blood = []; FX.parts = []; FX.shake = 0; FX.flash = 0; }
+
+// --- synthesized audio (no asset downloads, works offline) ---
+let _ac = null, _noiseBuf = null;
+function audio() {
+    try {
+        if (!_ac) _ac = new (window.AudioContext || window.webkitAudioContext)();
+        if (_ac.state === 'suspended') _ac.resume();
+        return _ac;
+    } catch (e) { return null; }
+}
+// browsers (iOS especially) only unlock audio from a user gesture
+['pointerdown', 'touchstart', 'keydown', 'click'].forEach(ev =>
+    window.addEventListener(ev, () => { if (S.active || S.phase !== 'off') audio(); }, { passive: true }));
+
+function noiseBuffer(a) {
+    if (!_noiseBuf) {
+        const len = Math.floor(a.sampleRate * 0.6);
+        _noiseBuf = a.createBuffer(1, len, a.sampleRate);
+        const d = _noiseBuf.getChannelData(0);
+        for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    }
+    return _noiseBuf;
+}
+function noiseBurst(a, t, dur, f0, f1, vol, type) {
+    const src = a.createBufferSource(); src.buffer = noiseBuffer(a);
+    const flt = a.createBiquadFilter(); flt.type = type || 'lowpass';
+    flt.frequency.setValueAtTime(f0, t);
+    flt.frequency.exponentialRampToValueAtTime(Math.max(40, f1), t + dur);
+    const g = a.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    src.connect(flt); flt.connect(g); g.connect(a.destination);
+    src.start(t, rand(0, 0.2)); src.stop(t + dur + 0.02);
+}
+function tone(a, t, dur, f0, f1, vol, wave) {
+    const o = a.createOscillator(); o.type = wave || 'sine';
+    o.frequency.setValueAtTime(f0, t);
+    o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+    const g = a.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g); g.connect(a.destination);
+    o.start(t); o.stop(t + dur + 0.02);
+}
+// flesh hit: wet slap + low thump. heavier hits are louder and deeper.
+function sfxHit(dmg, killed) {
+    const a = audio(); if (!a) return;
+    const t = a.currentTime, p = rand(0.92, 1.1), v = Math.min(1, 0.55 + dmg / 30);
+    noiseBurst(a, t, 0.13, 2600 * p, 400, 0.55 * v, 'lowpass');
+    tone(a, t, 0.17, 170 * p, 52, 0.7 * v, 'sine');
+    tone(a, t, 0.06, 900 * p, 300, 0.12 * v, 'square');
+    if (killed) {
+        tone(a, t + 0.02, 0.5, 95, 30, 0.8, 'sine');
+        noiseBurst(a, t + 0.03, 0.35, 1400, 150, 0.45, 'lowpass');
+    }
+}
+// blocked hit: metallic clang
+function sfxBlock() {
+    const a = audio(); if (!a) return;
+    const t = a.currentTime, p = rand(0.95, 1.08);
+    tone(a, t, 0.22, 1250 * p, 1180 * p, 0.22, 'triangle');
+    tone(a, t, 0.18, 1870 * p, 1790 * p, 0.14, 'square');
+    tone(a, t, 0.1, 420 * p, 200, 0.3, 'sine');
+    noiseBurst(a, t, 0.05, 6000, 2500, 0.25, 'highpass');
+}
+
+// --- floating damage numbers ---
+function addNum(x, y, text, color, size) {
+    FX.nums.push({ x: x + rand(-14, 14), y, vx: rand(-0.5, 0.5), vy: -2.6, age: 0, max: 62, text, color, size });
+}
+// --- blood: sprite-sheet splash + droplets that fall and stain the floor ---
+function spawnBlood(x, y, dir, dmg, killed) {
+    FX.blood.push({ x, y, frame: 0, t: 0, big: killed });
+    const n = Math.min(34, Math.round(8 + dmg * 0.8 + (killed ? 14 : 0)));
+    const cols = ['#c4141f', '#9c0d18', '#e02a35', '#7a0a12'];
+    for (let i = 0; i < n; i++) {
+        FX.parts.push({
+            kind: 'drop', x: x + rand(-6, 6), y: y + rand(-10, 10),
+            vx: dir * rand(1.2, 6.5) + rand(-1.2, 1.2), vy: rand(-6, -0.8),
+            size: rand(2, killed ? 5.5 : 4.2), life: 0, max: rand(30, 55),
+            color: cols[(Math.random() * cols.length) | 0], stuck: false,
+        });
+    }
+    if (FX.parts.length > 400) FX.parts.splice(0, FX.parts.length - 400);
+}
+function spawnSparks(x, y, dir) {
+    for (let i = 0; i < 9; i++) {
+        FX.parts.push({
+            kind: 'spark', x, y: y + rand(-8, 8),
+            vx: dir * rand(1.5, 6) + rand(-2, 2), vy: rand(-4, 1),
+            size: rand(1.5, 2.6), life: 0, max: rand(10, 18), color: Math.random() < 0.5 ? '#fff2b0' : '#ffd24a',
+        });
+    }
+}
+
+// effects for a hit that landed on `f` (victim). mine=true when *I* was the victim.
+function hitEffects(f, fromX, dmg, blocked, killed, mine) {
+    const cx = f.x + f.w / 2, cy = f.y + f.h * 0.4;
+    const dir = (fromX < f.x) ? 1 : -1;
+    const shown = Math.max(1, Math.round(dmg));
+    if (blocked) {
+        spawnSparks(cx - dir * 10, cy, -dir);
+        sfxBlock();
+        addNum(cx, f.y - 8, String(shown), '#9ad0ff', 18);
+        addNum(cx, f.y + 10, 'BLOCK', '#cfe8ff', 11);
+        FX.shake = Math.max(FX.shake, 3);
+    } else {
+        spawnBlood(cx - dir * 8, cy, dir, dmg, killed);
+        sfxHit(dmg, killed);
+        const big = killed ? 34 : (dmg >= 12 ? 26 : 22);
+        // red = damage I took, gold = damage I dealt
+        addNum(cx, f.y - 8, String(shown), mine ? '#ff4455' : '#ffe066', big);
+        if (killed) addNum(cx, f.y - 38, 'K.O.!', '#ff8a3c', 24);
+        FX.shake = Math.max(FX.shake, killed ? 14 : mine ? 8 : 5);
+        if (mine) FX.flash = killed ? 0.55 : 0.35;
+    }
+}
+
+function updateFx() {
+    FX.nums.forEach(n => { n.age++; n.x += n.vx; n.y += n.vy; n.vy *= 0.93; n.vy -= 0.02; });
+    FX.nums = FX.nums.filter(n => n.age < n.max);
+
+    FX.blood.forEach(b => { b.t++; if (b.t % 2 === 0) b.frame++; });
+    FX.blood = FX.blood.filter(b => b.frame < 30);
+
+    for (const p of FX.parts) {
+        p.life++;
+        if (p.stuck) continue;
+        p.vy += p.kind === 'spark' ? 0.25 : 0.38;
+        p.x += p.vx; p.y += p.vy;
+        p.vx *= 0.985;
+        if (p.kind === 'drop') {
+            for (const pl of arenaPlatforms()) {
+                if (p.vy > 0 && p.x > pl.x && p.x < pl.x + pl.w && p.y >= pl.y && p.y - p.vy <= pl.y + 4) {
+                    p.y = pl.y; p.stuck = true; p.size *= 1.4; p.life = Math.max(p.life, p.max - 70);
+                    p.max = p.life + rand(50, 90);
+                    break;
+                }
+            }
+        }
+    }
+    FX.parts = FX.parts.filter(p => p.life < p.max);
+
+    FX.shake *= 0.82; if (FX.shake < 0.3) FX.shake = 0;
+    FX.flash *= 0.9;  if (FX.flash < 0.01) FX.flash = 0;
+}
+
+function drawFx(ctx) {
+    // blood sprite-sheet (6x5 grid of 100x100 frames)
+    const sheet = window._images && window._images['blood_sheet'];
+    if (sheet && sheet.complete && sheet.naturalWidth) {
+        FX.blood.forEach(b => {
+            const col = b.frame % 6, row = Math.floor(b.frame / 6);
+            const sz = b.big ? 120 : 76;
+            ctx.save();
+            ctx.globalAlpha = Math.max(0, 1 - b.frame / 30 * 0.5);
+            ctx.drawImage(sheet, col * 100, row * 100, 100, 100, b.x - sz / 2, b.y - sz / 2, sz, sz);
+            ctx.restore();
+        });
+    }
+    // droplets, stains, sparks
+    for (const p of FX.parts) {
+        const left = p.max - p.life;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, Math.min(1, left / 18));
+        ctx.fillStyle = p.color;
+        if (p.kind === 'spark') {
+            ctx.fillRect(p.x, p.y, p.size * 2.4, p.size);
+        } else if (p.stuck) {
+            ctx.beginPath(); ctx.ellipse(p.x, p.y, p.size * 1.3, p.size * 0.5, 0, 0, Math.PI * 2); ctx.fill();
+        } else {
+            ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.restore();
+    }
+    // damage numbers (on top)
+    FX.nums.forEach(n => {
+        const pop = n.age < 7 ? 1 + (1 - n.age / 7) * 0.7 : 1;
+        const alpha = n.age > n.max - 18 ? (n.max - n.age) / 18 : 1;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, alpha);
+        ctx.translate(n.x, n.y); ctx.scale(pop, pop);
+        ctx.font = `bold ${n.size}px AntiquityPrint, Arial, sans-serif`;
+        ctx.textAlign = 'center'; ctx.lineJoin = 'round';
+        ctx.lineWidth = Math.max(3, n.size / 5); ctx.strokeStyle = '#000';
+        ctx.strokeText(n.text, 0, 0);
+        ctx.fillStyle = n.color; ctx.fillText(n.text, 0, 0);
+        ctx.restore();
+    });
+}
+
 // ---------------- RPC + errors ----------------
 async function rpc(name, args) {
     const { data, error } = await AQ.getDb().rpc(name, args || {});
@@ -264,6 +460,7 @@ function makeFighter(charKey, spawnX, facing) {
 }
 
 function startRound() {
+    fxReset();
     S.roundOver = false;
     S.ownDeathT = null; S.oppDeathT = null;
     clearTimeout(S.resolveTimer); S.resolveTimer = null;
@@ -317,6 +514,7 @@ function connectChannel() {
     const ch = AQ.getDb().channel('vs:' + S.lobbyId, { config: { broadcast: { self: false } } });
     ch.on('broadcast', { event: 'state' }, ({ payload }) => onState(payload));
     ch.on('broadcast', { event: 'hit'   }, ({ payload }) => onHit(payload));
+    ch.on('broadcast', { event: 'hitres' }, ({ payload }) => onHitRes(payload));
     ch.on('broadcast', { event: 'died'  }, ({ payload }) => onOppDied(payload));
     ch.on('broadcast', { event: 'leave' }, ({ payload }) => onOppLeft(payload));
     ch.subscribe(status => {
@@ -352,11 +550,22 @@ function onHit(p) {
     if (!fromOpp(p) || p.round !== S.round || p.to !== S.userId) return;
     const me = S.me;
     if (!me || S.roundOver || me.dead || me.invuln > 0) return;
-    const dmg = p.dmg * (me.blocking ? BLOCK_MULT : 1);
+    const blocked = !!me.blocking;
+    const dmg = p.dmg * (blocked ? BLOCK_MULT : 1);
     me.hp = Math.max(0, me.hp - dmg);
     me.invuln = INVULN_TICKS;
     me.knock = (p.fromX < me.x ? 1 : -1) * 4.5;
-    if (me.hp <= 0) killMe();
+    const killed = me.hp <= 0;
+    hitEffects(me, p.fromX, dmg, blocked, killed, true);
+    // tell the attacker what really happened so both screens show the same damage
+    send('hitres', { to: S.opp.id, dmg, blocked, killed, fromX: p.fromX });
+    if (killed) killMe();
+}
+
+// attacker side: the victim confirmed the hit, show the same numbers/blood/sound
+function onHitRes(p) {
+    if (!fromOpp(p) || p.round !== S.round || p.to !== S.userId || !S.R) return;
+    hitEffects(S.R, p.fromX, p.dmg, !!p.blocked, !!p.killed, false);
 }
 
 function onOppDied(p) {
@@ -550,6 +759,7 @@ function overlaps(hb, o) {
 function tick() {
     if (!S.active || (S.phase !== 'match' && S.phase !== 'result')) return;
     S.tickN++;
+    updateFx();
     const me = S.me, R = S.R;
     if (!me || !R) return;
 
@@ -678,11 +888,22 @@ function draw(ctx) {
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, w, h);
 
+    ctx.save();
+    if (FX.shake > 0) ctx.translate(rand(-FX.shake, FX.shake), rand(-FX.shake, FX.shake) * 0.6);
     const img = window._images && window._images['arena_platform'];
     arenaPlatforms().forEach(p => drawPlatform(ctx, p, img));
 
     if (S.R)  drawFighter(ctx, S.R);
     if (S.me) drawFighter(ctx, S.me);
+    drawFx(ctx);
+    ctx.restore();
+
+    if (FX.flash > 0) {   // red vignette when I take a hit
+        const vg = ctx.createRadialGradient(w / 2, h / 2, h * 0.35, w / 2, h / 2, h * 0.95);
+        vg.addColorStop(0, 'rgba(160,0,0,0)');
+        vg.addColorStop(1, `rgba(190,10,20,${FX.flash})`);
+        ctx.fillStyle = vg; ctx.fillRect(0, 0, w, h);
+    }
 
     if (S.me && S.R) {
         drawBar(ctx, 20, 14, S.me, S.username || 'You', '#aaff44', false);
@@ -737,6 +958,7 @@ function exitMatch() {
     S.active = false;
     S.phase = 'off';
     S.lobbyId = null; S.code = null; S.me = null; S.R = null; S.opp = null;
+    fxReset();
     hidePanel();
 }
 
