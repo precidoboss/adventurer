@@ -488,6 +488,7 @@ window.AQ = {
     getSession() { return _session; },
     isGuest()    { return _isGuest; },
     getBankCoins() { return _session ? (_session.total_coins||0) : 0; },
+    getDb() { return db; },
 };
 
 // ---- INIT ----

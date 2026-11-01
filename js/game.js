@@ -3346,6 +3346,8 @@
             const el = document.getElementById(id); if(el) el.style.display='none';
         });
         if (window.CH2) window.CH2.active = false;
+        // Leave any 1v1 match / lobby
+        if (window.VS && window.VS.exitMatch) window.VS.exitMatch();
         // Show home screen again
         const homeEl = document.getElementById('home-screen');
         homeEl.style.display = 'flex';
@@ -3468,6 +3470,11 @@
     }
 
     function update() {
+        // 1v1 multiplayer owns its own update while a match runs
+        if (window.VS && window.VS.isActive()) {
+            if (window._vsTickHook) window._vsTickHook();
+            return;
+        }
         // CH2 owns its own update — skip main loop when active
         if (window.CH2 && window.CH2.active) {
             if (window._ch2TickHook) window._ch2TickHook();
@@ -4164,6 +4171,14 @@
         ctx.globalAlpha = 1;
         ctx.clearRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
 
+        // 1v1 multiplayer owns its own draw while a match runs
+        if (window.VS && window.VS.isActive()) {
+            ctx.save();
+            if (window._vsDrawHook) window._vsDrawHook();
+            ctx.restore();
+            drawCanvasUI();
+            return;
+        }
         // CH2 owns its own draw — skip main renderer when active
         if (window.CH2 && window.CH2.active) {
             ctx.save();
@@ -4454,7 +4469,7 @@
 
     function drawCanvasUI() {
         // In CH2 Gauntlet mode, the CH2 engine draws its own HUD — skip everything here
-        if (window.CH2 && window.CH2.active) { return; }
+        if ((window.CH2 && window.CH2.active) || (window.VS && window.VS.isActive())) { return; }
 
         ctx.save();
         ctx.imageSmoothingEnabled = false;
