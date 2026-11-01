@@ -48,18 +48,18 @@ const ACH_CATALOG = [
     { key:'veteran',      name:'10x Veteran',      desc:'Complete Shadow Chronicle 10 times',         icon:'🎖️' },
 ];
 
-// ---- HASH helpers ----
-async function hashPwd(pwd) {
-    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pwd));
-    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+// ---- RPC helper: every database call goes through a server-side function ----
+async function rpc(name, args) {
+    const { data, error } = await db.rpc(name, args || {});
+    if (error) {
+        if ((error.message || '').includes('invalid_session')) {
+            saveSession(null); _isGuest = false; updateHomeBar();
+        }
+        throw error;
+    }
+    return data;
 }
-function checkPwd(pwd, hash) {
-    // sync compare not possible with subtle — caller must use await checkPwdAsync
-    return false;
-}
-async function checkPwdAsync(pwd, hash) {
-    return (await hashPwd(pwd)) === hash;
-}
+const nInt = v => Math.max(0, Math.floor(Number(v) || 0));
 
 // ---- UI helpers ----
 function el(id)    { return document.getElementById(id); }
@@ -118,38 +118,50 @@ function authErr(msg) {
     if (e) { e.textContent = msg; e.style.display = 'block'; }
 }
 
+function setAuthBusy(busy, busyText, idleText) {
+    const b = el('aq-auth-submit');
+    if (!b) return;
+    b.textContent = busy ? busyText : idleText;
+    b.disabled = busy;
+}
+
+function applyAuthResult(res) {
+    saveSession({ id: res.user.id, username: res.user.username, total_coins: res.user.total_coins || 0, token: res.token });
+    _isGuest = false;
+    closeAllOverlays();
+    updateHomeBar();
+}
+
 async function doRegister() {
     const username = (el('aq-uname').value||'').trim();
     const pwd      = (el('aq-pwd').value||'').trim();
     if (!username || username.length < 3) { authErr('Username must be at least 3 characters.'); return; }
     if (!pwd || pwd.length < 4) { authErr('Password must be at least 4 characters.'); return; }
-    el('aq-auth-submit').textContent = 'Creating...';
-    el('aq-auth-submit').disabled = true;
-    // Check username taken
-    const { data: existing } = await db.from('users').select('id').eq('username', username).maybeSingle();
-    if (existing) { authErr('Username already taken.'); el('aq-auth-submit').textContent='Create Account'; el('aq-auth-submit').disabled=false; return; }
-    const hash = await hashPwd(pwd);
-    const { data, error } = await db.from('users').insert({ username, password_hash: hash }).select('id,username,total_coins').single();
-    if (error || !data) { authErr('Error creating account. Try again.'); el('aq-auth-submit').textContent='Create Account'; el('aq-auth-submit').disabled=false; return; }
-    saveSession({ id: data.id, username: data.username, total_coins: data.total_coins||0 });
-    _isGuest = false;
-    closeAllOverlays();
-    updateHomeBar();
+    setAuthBusy(true, 'Creating...', 'Create Account');
+    try {
+        applyAuthResult(await rpc('register_user', { p_username: username, p_password: pwd }));
+    } catch (e) {
+        const m = e.message || '';
+        if (m.includes('username_taken')) authErr('Username already taken.');
+        else if (m.includes('invalid_username')) authErr('Username must be 3 to 20 characters.');
+        else if (m.includes('invalid_password')) authErr('Password must be 4 to 40 characters.');
+        else authErr('Error creating account. Try again.');
+        setAuthBusy(false, '', 'Create Account');
+    }
 }
 
 async function doLogin() {
     const username = (el('aq-uname').value||'').trim();
     const pwd      = (el('aq-pwd').value||'').trim();
     if (!username || !pwd) { authErr('Please fill in all fields.'); return; }
-    el('aq-auth-submit').textContent = 'Logging in...';
-    el('aq-auth-submit').disabled = true;
-    const { data, error } = await db.from('users').select('id,username,password_hash,total_coins').eq('username', username).maybeSingle();
-    if (!data || error) { authErr('Username not found.'); el('aq-auth-submit').textContent='Login'; el('aq-auth-submit').disabled=false; return; }
-    if (!await checkPwdAsync(pwd, data.password_hash)) { authErr('Incorrect password.'); el('aq-auth-submit').textContent='Login'; el('aq-auth-submit').disabled=false; return; }
-    saveSession({ id: data.id, username: data.username, total_coins: data.total_coins||0 });
-    _isGuest = false;
-    closeAllOverlays();
-    updateHomeBar();
+    setAuthBusy(true, 'Logging in...', 'Login');
+    try {
+        applyAuthResult(await rpc('login_user', { p_username: username, p_password: pwd }));
+    } catch (e) {
+        if ((e.message || '').includes('invalid_credentials')) authErr('Incorrect username or password.');
+        else authErr('Could not reach the server. Try again.');
+        setAuthBusy(false, '', 'Login');
+    }
 }
 
 function closeAllOverlays() {
@@ -188,44 +200,42 @@ async function finishSCRun(completed) {
     // Use max of tracked vs actual player coins as safety net
     const actualCoins = (typeof player !== 'undefined' ? player.coins : 0);
     const coinsEarned = Math.max(s.coinsEarned, actualCoins + s.coinsSpent);
-    const { data: run, error } = await db.from('shadow_chronicle_runs').insert({
-        user_id:       _session.id,
-        completed:     !!completed,
-        time_taken_ms: time_ms,
-        coins_earned:  coinsEarned,
-        coins_spent:   s.coinsSpent,
-        enemies_killed: s.kills,
-        damage_dealt:  s.damageDone,
-        damage_taken:  s.damageTaken,
-        deaths:        s.deaths,
-        distance:      s.distance,
-    }).select('id, coins_banked').single();
-    if (error || !run) { console.warn('SC run save error', error); return; }
-
-    // Bank leftover coins
-    if (completed && run.coins_banked > 0) {
-        await db.from('users').update({ total_coins: (_session.total_coins||0) + run.coins_banked }).eq('id', _session.id);
-        _session.total_coins = (_session.total_coins||0) + run.coins_banked;
-        saveSession(_session);
-        updateHomeBar();
-        // Show bank notification
-        const bv = el('aq-bank-val');
-        if (bv) bv.textContent = _session.total_coins.toLocaleString();
-    }
-
-    // Check achievements
+    try {
+        const res = await rpc('submit_shadow_run', {
+            p_token:          _session.token,
+            p_completed:      !!completed,
+            p_time_ms:        time_ms === null ? null : nInt(time_ms),
+            p_coins_earned:   nInt(coinsEarned),
+            p_coins_spent:    nInt(s.coinsSpent),
+            p_enemies_killed: nInt(s.kills),
+            p_damage_dealt:   nInt(s.damageDone),
+            p_damage_taken:   nInt(s.damageTaken),
+            p_deaths:         nInt(s.deaths),
+            p_distance:       nInt(s.distance),
+        });
+        // The server does the banking; just mirror its new total locally
+        if (res && typeof res.total_coins === 'number') {
+            _session.total_coins = res.total_coins;
+            saveSession(_session);
+            updateHomeBar();
+            const bv = el('aq-bank-val');
+            if (bv) bv.textContent = _session.total_coins.toLocaleString();
+        }
+    } catch(e) { console.warn('SC run save error', e); return; }
     await checkAchievements();
 }
 
 async function finishEndlessRun() {
     if (!_session || _isGuest) return;
     const s = _runStats.endless;
-    await db.from('endless_runs').insert({
-        user_id:       _session.id,
-        distance:      s.distance,
-        coins_earned:  s.coinsEarned,
-        enemies_killed: s.kills,
-    });
+    try {
+        await rpc('submit_endless_run', {
+            p_token:          _session.token,
+            p_distance:       nInt(s.distance),
+            p_coins_earned:   nInt(s.coinsEarned),
+            p_enemies_killed: nInt(s.kills),
+        });
+    } catch(e) { console.warn('Endless run save error', e); return; }
     await checkAchievements();
 }
 
@@ -238,68 +248,23 @@ async function finishGauntletRun(ch2Data) {
     if (!_session || _isGuest) return;
     // ch2Data: { character, totalTimeMs, deaths, perfectStages, stageTimes }
     try {
-        await db.from('gauntlet_runs').insert({
-            user_id:        _session.id,
-            character:      ch2Data.character,
-            total_time_ms:  ch2Data.totalTimeMs,
-            deaths:         ch2Data.deaths,
-            perfect_stages: ch2Data.perfectStages,
-            stage_times:    ch2Data.stageTimes, // JSON array
-            completed:      true,
+        await rpc('submit_gauntlet_run', {
+            p_token:         _session.token,
+            p_character:     ch2Data.character,
+            p_total_time_ms: nInt(ch2Data.totalTimeMs),
+            p_deaths:        nInt(ch2Data.deaths),
+            p_perfect_stages: nInt(ch2Data.perfectStages),
+            p_stage_times:   ch2Data.stageTimes || [],
         });
         await checkAchievements();
     } catch(e) { console.warn('Gauntlet run save error', e); }
 }
 
-// ---- ACHIEVEMENTS ----
+// Achievements are unlocked by the server from stored run data
 async function checkAchievements() {
     if (!_session || _isGuest) return;
     try {
-        // Fetch user aggregate stats for achievement checks
-        const [scRes, endlessRes, achRes] = await Promise.all([
-            db.from('shadow_chronicle_runs').select('completed, time_taken_ms, damage_taken, deaths, enemies_killed').eq('user_id', _session.id),
-            db.from('endless_runs').select('distance, enemies_killed').eq('user_id', _session.id),
-            db.from('user_achievements').select('achievement_id').eq('user_id', _session.id)
-        ]);
-
-        const scRuns    = scRes.data || [];
-        const eRuns     = endlessRes.data || [];
-        const unlockedIds = new Set((achRes.data||[]).map(a=>a.achievement_id));
-
-        const completions     = scRuns.filter(r=>r.completed);
-        const totalSCKills    = scRuns.reduce((s,r)=>s+(r.enemies_killed||0),0);
-        const totalEndKills   = eRuns.reduce((s,r)=>s+(r.enemies_killed||0),0);
-        const totalKills      = totalSCKills + totalEndKills;
-        const bestEndDist     = Math.max(0,...eRuns.map(r=>r.distance||0));
-        const hasDeathless    = completions.some(r=>(r.deaths||0)===0);
-        const hasUntouchable  = completions.some(r=>(r.damage_taken||0)===0);
-        const hasSpeedDemon   = completions.some(r=>r.time_taken_ms && r.time_taken_ms < 10*60*1000);
-        const bank            = _session.total_coins||0;
-
-        // Achievement key → id lookup
-        const { data: achDefs } = await db.from('achievements').select('id,key');
-        const keyToId = {};
-        (achDefs||[]).forEach(a=>{ keyToId[a.key]=a.id; });
-
-        const toUnlock = [];
-        function check(key, cond) { if(cond && keyToId[key] && !unlockedIds.has(keyToId[key])) toUnlock.push(keyToId[key]); }
-
-        check('first_run',    completions.length >= 1);
-        check('speed_demon',  hasSpeedDemon);
-        check('untouchable',  hasUntouchable);
-        check('coin_hoarder', bank >= 1000);
-        check('rich',         bank >= 10000);
-        check('exterminator', totalKills >= 500);
-        check('endless_100',  bestEndDist >= 100);
-        check('endless_500',  bestEndDist >= 500);
-        check('deathless',    hasDeathless);
-        check('veteran',      completions.length >= 10);
-
-        if (toUnlock.length) {
-            await db.from('user_achievements').insert(
-                toUnlock.map(id=>({ user_id: _session.id, achievement_id: id }))
-            );
-        }
+        await rpc('check_achievements', { p_token: _session.token });
     } catch(e) { console.warn('Ach check err', e); }
 }
 
@@ -311,21 +276,13 @@ async function showProfile() {
     show('aq-profile-overlay');
 
     try {
-        const [userRes, scRes, endRes, achRes, achDefRes, gRes] = await Promise.all([
-            db.from('users').select('username,total_coins,created_at').eq('id', _session.id).single(),
-            db.from('shadow_chronicle_runs').select('*').eq('user_id', _session.id),
-            db.from('endless_runs').select('*').eq('user_id', _session.id),
-            db.from('user_achievements').select('achievement_id, unlocked_at').eq('user_id', _session.id),
-            db.from('achievements').select('*'),
-            db.from('gauntlet_runs').select('*').eq('user_id', _session.id),
-        ]);
-
-        const user   = userRes.data || {};
-        const scRuns = scRes.data   || [];
-        const eRuns  = endRes.data  || [];
-        const gRuns  = gRes.data    || [];
-        const unlockedAchs = new Set((achRes.data||[]).map(a=>a.achievement_id));
-        const achDefs = achDefRes.data || [];
+        const stats = await rpc('get_my_stats', { p_token: _session.token });
+        const user   = stats.user || {};
+        const scRuns = stats.sc_runs || [];
+        const eRuns  = stats.endless_runs || [];
+        const gRuns  = stats.gauntlet_runs || [];
+        const unlockedAchs = new Set(stats.unlocked_ids || []);
+        const achDefs = stats.achievements || [];
 
         const completions     = scRuns.filter(r=>r.completed);
         const bestSCTime      = completions.length ? Math.min(...completions.map(r=>r.time_taken_ms||Infinity)) : null;
@@ -509,6 +466,7 @@ window.AQ = {
         updateHomeBar();
     },
     logout() {
+        if (_session && _session.token) db.rpc('logout_user', { p_token: _session.token }).catch(() => {});
         saveSession(null);
         _session = null;
         _isGuest = false;
@@ -534,12 +492,18 @@ window.AQ = {
 
 // ---- INIT ----
 loadSession();
-window.addEventListener('DOMContentLoaded', () => {
-    // If no session show auth state
+// Sessions saved by the old client-side login have no token and can't be used
+if (_session && !_session.token) saveSession(null);
+window.addEventListener('DOMContentLoaded', async () => {
     updateHomeBar();
-    // Show auth prompt automatically if not logged in on home screen
-    if (!_session && !_isGuest) {
-        // Don't auto-open — let user click the buttons
+    if (_session && _session.token) {
+        try {
+            const me = await rpc('get_me', { p_token: _session.token });
+            _session.total_coins = me.total_coins || 0;
+            _session.username = me.username;
+            saveSession(_session);
+        } catch(e) { /* rpc() clears a rejected session */ }
+        updateHomeBar();
     }
 });
 
