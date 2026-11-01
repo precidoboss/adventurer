@@ -3253,6 +3253,51 @@
         setInput: v => { dialogueState.inputVal = String(v || '').replace(/[^a-zA-Z]/g, '').slice(0, 10); },
         getInput: () => dialogueState.inputVal || '',
         submitInput: () => submitNPC2Password(dialogueState.inputVal || ''),
+        bossArena:    () => !!STORY_MODE.bossArena,
+        cinematic:    () => !!STORY_MODE.cinematic,
+    };
+
+    // ---- ADMIN: Shadow Chronicle stage warp ------------------------------------------
+    // Stages follow the real story order: objectives -> encounter 1 -> encounter 2 -> portal -> boss.
+    // Warping to a stage completes everything before it. The panel (js/admin.js) is only shown to
+    // users the server confirms as admin, and AQ.verifyAdmin() is re-checked here on every call.
+    const ADMIN_ALL_OBJ = ['kill5','coins20','kill10','chests3','survive90','run500','kill20','artifacts2'];
+    const ADMIN_STAGES = {
+        objectives: [],                                                  // fresh start: nothing done
+        encounter1: ['kill5','coins20','kill10','chests3'],              // 50%  -> Zephira appears
+        encounter2: ['kill5','coins20','kill10','chests3','survive90','run500'], // 75% -> Kael appears
+        portal:     ADMIN_ALL_OBJ,                                       // 100% -> rift opens
+        boss:       ADMIN_ALL_OBJ,                                       // 100% + step through the rift
+    };
+    window._adminWarp = async function (stage) {
+        const SM = STORY_MODE;
+        if (!window.AQ || !(await AQ.verifyAdmin())) return false;
+        if (!SM.active || SM.cinematic || SM.bossArena || !ADMIN_STAGES[stage]) return false;
+        const done = ADMIN_STAGES[stage], has = id => done.includes(id);
+        const idx = ['objectives','encounter1','encounter2','portal','boss'].indexOf(stage);
+
+        // clear story-stage state, then rebuild it for the target stage
+        SM.dialogue = null; gamePaused = false; closeMarket();
+        SM.npc1 = null; SM.npc2 = null; SM.portal = null;
+        SM.npc1Shown = idx >= 2; SM.npc1Talked = idx >= 2;      // past encounter 1 => already met Zephira
+        SM.npc2Shown = idx >= 3; SM.npc2Talked = idx >= 3;      // past encounter 2 => already met Kael
+        SM.portalShown = false;
+        SM.bossWeaknessKnown = idx >= 3;
+
+        SM.objectives.forEach(o => { o.done = has(o.id); });
+        // keep the live counters consistent so updateStoryObjectives() can't flip anything back
+        SM.totalKills     = has('kill20')    ? Math.max(SM.totalKills, 20)    : (has('kill10') ? Math.min(Math.max(SM.totalKills, 10), 19) : Math.min(SM.totalKills, 4));
+        SM.totalChests    = has('chests3')   ? Math.max(SM.totalChests, 3)    : Math.min(SM.totalChests, 2);
+        SM.totalArtifacts = has('artifacts2')? Math.max(SM.totalArtifacts, 2) : Math.min(SM.totalArtifacts, 1);
+        if (has('coins20')) player.coins = Math.max(player.coins, 20); else player.coins = Math.min(player.coins, 19);
+        SM.timer = has('survive90') ? Math.max(SM.timer, 90 * 60) : Math.min(SM.timer, 89 * 60);
+        score    = has('run500')    ? Math.max(score, 500)         : Math.min(score, 499);
+        uiCoins = player.coins;
+
+        updateStoryObjectives();          // spawns the NPC / portal for this stage
+        dmgNumbers.push({ x: player.x + 10, y: player.y - 40, val: '🛠 ADMIN WARP: ' + stage.toUpperCase(), life: 120, color: '#66ddff', isText: true });
+        if (stage === 'boss') { SM.bossUnlocked = true; tryEnterPortal(); }
+        return true;
     };
     window.addEventListener('mousedown', () => { startMusic(); });
 
