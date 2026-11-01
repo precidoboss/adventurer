@@ -15,6 +15,7 @@ const db = createClient(SUPABASE_URL, SUPABASE_ANON);
 // Session stored in localStorage
 let _session = null; // { id, username, total_coins }
 let _isGuest  = false;
+let _isAdmin  = false; // server-confirmed only; never read from localStorage
 
 function loadSession() {
     try {
@@ -53,7 +54,7 @@ async function rpc(name, args) {
     const { data, error } = await db.rpc(name, args || {});
     if (error) {
         if ((error.message || '').includes('invalid_session')) {
-            saveSession(null); _isGuest = false; updateHomeBar();
+            saveSession(null); _isAdmin = false; _isGuest = false; updateHomeBar();
         }
         throw error;
     }
@@ -127,6 +128,7 @@ function setAuthBusy(busy, busyText, idleText) {
 
 function applyAuthResult(res) {
     saveSession({ id: res.user.id, username: res.user.username, total_coins: res.user.total_coins || 0, token: res.token });
+    _isAdmin = !!res.user.is_admin;
     _isGuest = false;
     closeAllOverlays();
     updateHomeBar();
@@ -460,7 +462,7 @@ window.AQ = {
     closeAuth() { hide('aq-auth-overlay'); },
     guestMode() {
         _isGuest = true;
-        _session = null;
+        _session = null; _isAdmin = false;
         saveSession(null);
         hide('aq-auth-overlay');
         updateHomeBar();
@@ -468,7 +470,7 @@ window.AQ = {
     logout() {
         if (_session && _session.token) db.rpc('logout_user', { p_token: _session.token }).catch(() => {});
         saveSession(null);
-        _session = null;
+        _session = null; _isAdmin = false;
         _isGuest = false;
         updateHomeBar();
     },
@@ -487,6 +489,14 @@ window.AQ = {
 
     getSession() { return _session; },
     isGuest()    { return _isGuest; },
+    isAdmin()    { return _isAdmin && !!(_session && _session.token); },
+    // Re-checks admin rights with the server (token-checked RPC) — used before every stage warp
+    async verifyAdmin() {
+        if (!_session || !_session.token) { _isAdmin = false; return false; }
+        try { _isAdmin = (await rpc('admin_check', { p_token: _session.token })) === true; }
+        catch (e) { _isAdmin = false; }
+        return _isAdmin;
+    },
     getBankCoins() { return _session ? (_session.total_coins||0) : 0; },
     getDb() { return db; },
 };
@@ -502,6 +512,7 @@ window.addEventListener('DOMContentLoaded', async () => {
             const me = await rpc('get_me', { p_token: _session.token });
             _session.total_coins = me.total_coins || 0;
             _session.username = me.username;
+            _isAdmin = !!me.is_admin;
             saveSession(_session);
         } catch(e) { /* rpc() clears a rejected session */ }
         updateHomeBar();
